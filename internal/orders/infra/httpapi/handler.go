@@ -13,6 +13,7 @@ import (
 	"github.com/codEvil1/stockly/internal/orders/domain"
 )
 
+
 type Handler struct{ svc *app.Service }
 
 func NewHandler(svc *app.Service) *Handler { return &Handler{svc: svc} }

@@ -8,6 +8,8 @@ services:
     volumes:
       - ./migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
       interval: 5s
-      retries: 10
+      timeout: 3s
+      retries: 20
+      start_period: 30s
