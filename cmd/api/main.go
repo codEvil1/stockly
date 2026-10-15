@@ -35,8 +35,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := db.PingContext(ctx); err != nil {
-		slog.Error("pinging database", "err", err)
+	var pingErr error
+	for i := 0; i < 10; i++ {
+		if pingErr = db.PingContext(ctx); pingErr == nil {
+			break
+		}
+		slog.Warn("database not ready, retrying", "attempt", i+1, "err", pingErr)
+		select {
+		case <-ctx.Done():
+			os.Exit(1)
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if pingErr != nil {
+		slog.Error("pinging database", "err", pingErr)
 		os.Exit(1)
 	}
 
@@ -46,6 +58,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer, middleware.Timeout(10*time.Second))
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	httpapi.DocsRoutes(r)
 	httpapi.NewHandler(svc).Routes(r)
 
 	srv := &http.Server{Addr: ":8080", Handler: r, ReadHeaderTimeout: 5 * time.Second}

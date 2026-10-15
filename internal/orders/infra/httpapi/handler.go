@@ -44,8 +44,11 @@ type orderResp struct {
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
 	var req createReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CustomerID == "" {
+	if err := dec.Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
 		return
 	}

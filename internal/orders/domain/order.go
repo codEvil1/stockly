@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,11 +18,20 @@ const (
 	StatusCanceled  Status = "CANCELED"
 )
 
+const (
+	maxItems      = 200
+	maxSKULen     = 50
+	maxQuantity   = 1_000_000
+	maxPriceCents = 10_000_000_000
+)
+
 var (
 	ErrNoItems           = errors.New("order must have at least one item")
 	ErrInvalidItem       = errors.New("item has empty sku, or invalid quantity or price")
 	ErrInvalidTransition = errors.New("invalid status transition")
 	ErrNotFound          = errors.New("order not found")
+	ErrInvalidCustomer   = errors.New("customer id is required (max 36 chars)")
+	ErrDuplicateSKU      = errors.New("duplicate sku in order")
 )
 
 type Item struct {
@@ -46,14 +56,26 @@ type Order struct {
 }
 
 func NewOrder(id, customerID string, items []Item, now time.Time) (*Order, error) {
-	if len(items) == 0 {
+	if id == "" || customerID == "" || len(customerID) > 36 {
+		return nil, ErrInvalidCustomer
+	}
+	if len(items) == 0 || len(items) > maxItems {
 		return nil, ErrNoItems
 	}
+	seen := make(map[string]struct{}, len(items))
 	for _, it := range items {
-		if it.SKU == "" || it.Quantity <= 0 || it.PriceCents < 0 {
+		if it.SKU == "" || len(it.SKU) > maxSKULen ||
+			it.Quantity <= 0 || it.Quantity > maxQuantity ||
+			it.PriceCents < 0 || it.PriceCents > maxPriceCents {
 			return nil, ErrInvalidItem
 		}
+		if _, dup := seen[it.SKU]; dup {
+			return nil, ErrDuplicateSKU
+		}
+		seen[it.SKU] = struct{}{}
 	}
+	items = slices.Clone(items)
+	
 	o := &Order{ID: id, CustomerID: customerID, Status: StatusCreated, Items: items, CreatedAt: now}
 
 	payload, err := json.Marshal(map[string]any{
