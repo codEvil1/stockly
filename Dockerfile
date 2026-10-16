@@ -10,7 +10,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux \
     go build -trimpath -ldflags="-s -w" -o /stockly-api ./cmd/api
 
-FROM alpine:3.22
+FROM alpine:3.24
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates \
