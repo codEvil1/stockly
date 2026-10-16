@@ -1,0 +1,5 @@
+# Normaliza finais de linha: o repositório guarda LF, qualquer que seja o SO.
+* text=auto eol=lf
+*.sh text eol=lf
+*.sql text eol=lf
+*.go text eol=lf

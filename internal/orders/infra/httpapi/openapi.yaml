@@ -1,19 +1,35 @@
 openapi: 3.0.3
 info:
   title: Stockly API
-  version: 1.0.0
+  version: 1.1.0
+  description: API de pedidos do Stockly.
 servers:
   - url: http://localhost:8080
 paths:
   /healthz:
     get:
-      summary: Health check
+      summary: Liveness (o processo está de pé)
       responses:
         "200":
           description: OK
+  /readyz:
+    get:
+      summary: Readiness (o banco de dados responde)
+      responses:
+        "200":
+          description: Pronto para receber tráfego
+        "503":
+          description: Dependência indisponível
   /orders:
     post:
       summary: Criar pedido
+      description: >
+        Envie o header `Idempotency-Key` para tornar a criação segura contra
+        repetições (retry de cliente, timeout de rede). Uma segunda chamada com
+        a mesma chave devolve o pedido original com status 200 e o header
+        `Idempotent-Replay: true`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -23,32 +39,66 @@ paths:
       responses:
         "201":
           description: Pedido criado
+          headers:
+            Location:
+              schema:
+                type: string
+              example: /orders/3f2b1c1e-8a47-4b9b-9d55-0a1b2c3d4e5f
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "200":
+          description: Repetição idempotente; devolve o pedido já criado
+          headers:
+            Idempotent-Replay:
+              schema:
+                type: string
+                enum: ["true"]
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
         "400":
-          description: Payload ou dados inválidos
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+          $ref: "#/components/responses/BadRequest"
         "500":
-          description: Erro interno
+          $ref: "#/components/responses/Internal"
+    get:
+      summary: Listar pedidos (mais recentes primeiro)
+      parameters:
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+            maxLength: 36
+        - name: limit
+          in: query
+          description: Padrão 20, máximo 100.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Página de pedidos
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/OrderList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/Internal"
   /orders/{id}:
     get:
       summary: Buscar pedido por ID
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
+        - $ref: "#/components/parameters/OrderID"
       responses:
         "200":
           description: Pedido encontrado
@@ -56,19 +106,93 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "404":
-          description: Pedido não encontrado
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
+          $ref: "#/components/responses/NotFound"
         "500":
-          description: Erro interno
+          $ref: "#/components/responses/Internal"
+  /orders/{id}/complete:
+    post:
+      summary: Concluir pedido (CREATED → COMPLETED)
+      parameters:
+        - $ref: "#/components/parameters/OrderID"
+      responses:
+        "200":
+          description: Pedido concluído
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /orders/{id}/cancel:
+    post:
+      summary: Cancelar pedido (CREATED → CANCELED)
+      parameters:
+        - $ref: "#/components/parameters/OrderID"
+      responses:
+        "200":
+          description: Pedido cancelado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/Internal"
 components:
+  parameters:
+    OrderID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 64
+  responses:
+    BadRequest:
+      description: Payload, parâmetro ou dados inválidos
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Pedido não encontrado
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Transição de status inválida para o estado atual do pedido
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Internal:
+      description: Erro interno
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   schemas:
     Item:
       type: object
@@ -87,6 +211,7 @@ components:
           type: integer
           format: int64
           minimum: 0
+          maximum: 10000000000
           example: 1000
     CreateOrderRequest:
       type: object
@@ -94,12 +219,14 @@ components:
       properties:
         customer_id:
           type: string
+          minLength: 1
           maxLength: 36
           example: cust-1
         items:
           type: array
           minItems: 1
           maxItems: 200
+          description: SKUs não podem se repetir no mesmo pedido.
           items:
             $ref: "#/components/schemas/Item"
     Order:
@@ -123,6 +250,13 @@ components:
         created_at:
           type: string
           format: date-time
+    OrderList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
     Error:
       type: object
       properties:

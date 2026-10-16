@@ -1,6 +1,6 @@
 CREATE TABLE orders (
   id CHAR(36) PRIMARY KEY,
-  customer_id CHAR(36) NOT NULL,
+  customer_id VARCHAR(36) NOT NULL,
   status VARCHAR(20) NOT NULL,
   total_cents BIGINT NOT NULL,
   created_at DATETIME(6) NOT NULL,

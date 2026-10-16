@@ -1,0 +1,16 @@
+# Binários e artefatos de build
+/bin/
+/stockly-api
+*.exe
+*.test
+*.out
+coverage.html
+
+# Ambiente local
+.env
+
+# Editores / SO
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

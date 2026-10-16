@@ -23,15 +23,32 @@ const (
 	maxSKULen     = 50
 	maxQuantity   = 1_000_000
 	maxPriceCents = 10_000_000_000
+	maxCustomerID = 36
 )
 
+const (
+	EventOrderCreated   = "OrderCreated"
+	EventOrderCompleted = "OrderCompleted"
+	EventOrderCanceled  = "OrderCanceled"
+)
+
+type ValidationError struct{ msg string }
+
+func (e ValidationError) Error() string { return e.msg }
+
+func NewValidationError(msg string) ValidationError { return ValidationError{msg: msg} }
+
 var (
-	ErrNoItems           = errors.New("order must have at least one item")
-	ErrInvalidItem       = errors.New("item has empty sku, or invalid quantity or price")
+	ErrNoItems         = ValidationError{"order must have at least one item"}
+	ErrTooManyItems    = ValidationError{"order has too many items"}
+	ErrInvalidItem     = ValidationError{"item has empty sku, or invalid quantity or price"}
+	ErrInvalidCustomer = ValidationError{"customer id is required (max 36 chars)"}
+	ErrDuplicateSKU    = ValidationError{"duplicate sku in order"}
+	ErrInvalidID       = ValidationError{"invalid order id"}
+
 	ErrInvalidTransition = errors.New("invalid status transition")
 	ErrNotFound          = errors.New("order not found")
-	ErrInvalidCustomer   = errors.New("customer id is required (max 36 chars)")
-	ErrDuplicateSKU      = errors.New("duplicate sku in order")
+	ErrDuplicateKey      = errors.New("idempotency key already used")
 )
 
 type Item struct {
@@ -41,9 +58,11 @@ type Item struct {
 }
 
 type Event struct {
-	ID      string
-	Type    string
-	Payload []byte
+	ID          string
+	AggregateID string
+	Type        string
+	Payload     []byte
+	OccurredAt  time.Time
 }
 
 type Order struct {
@@ -56,11 +75,14 @@ type Order struct {
 }
 
 func NewOrder(id, customerID string, items []Item, now time.Time) (*Order, error) {
-	if id == "" || customerID == "" || len(customerID) > 36 {
+	if id == "" || customerID == "" || len(customerID) > maxCustomerID {
 		return nil, ErrInvalidCustomer
 	}
-	if len(items) == 0 || len(items) > maxItems {
+	if len(items) == 0 {
 		return nil, ErrNoItems
+	}
+	if len(items) > maxItems {
+		return nil, ErrTooManyItems
 	}
 	seen := make(map[string]struct{}, len(items))
 	for _, it := range items {
@@ -74,20 +96,22 @@ func NewOrder(id, customerID string, items []Item, now time.Time) (*Order, error
 		}
 		seen[it.SKU] = struct{}{}
 	}
-	items = slices.Clone(items)
-	
-	o := &Order{ID: id, CustomerID: customerID, Status: StatusCreated, Items: items, CreatedAt: now}
 
-	payload, err := json.Marshal(map[string]any{
+	o := &Order{
+		ID:         id,
+		CustomerID: customerID,
+		Status:     StatusCreated,
+		Items:      slices.Clone(items),
+		CreatedAt:  now,
+	}
+	if err := o.record(EventOrderCreated, now, map[string]any{
 		"order_id":    o.ID,
 		"customer_id": o.CustomerID,
 		"total_cents": o.Total(),
 		"items":       o.Items,
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
-	o.events = append(o.events, Event{ID: uuid.NewString(), Type: "OrderCreated", Payload: payload})
 	return o, nil
 }
 
@@ -103,25 +127,53 @@ func (o *Order) Total() int64 {
 	return total
 }
 
-func (o *Order) Complete() error {
-	if o.Status != StatusCreated {
-		return ErrInvalidTransition
-	}
-	o.Status = StatusCompleted
-	return nil
+func (o *Order) Complete(now time.Time) error {
+	return o.transition(StatusCompleted, EventOrderCompleted, now)
 }
 
-func (o *Order) Cancel() error {
-	if o.Status != StatusCreated {
-		return ErrInvalidTransition
-	}
-	o.Status = StatusCanceled
-	return nil
+func (o *Order) Cancel(now time.Time) error {
+	return o.transition(StatusCanceled, EventOrderCanceled, now)
 }
 
 func (o *Order) Events() []Event { return o.events }
 
+func (o *Order) transition(to Status, eventType string, now time.Time) error {
+	if o.Status != StatusCreated {
+		return ErrInvalidTransition
+	}
+	o.Status = to
+	return o.record(eventType, now, map[string]any{
+		"order_id":    o.ID,
+		"customer_id": o.CustomerID,
+		"status":      to,
+	})
+}
+
+func (o *Order) record(eventType string, now time.Time, data map[string]any) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	o.events = append(o.events, Event{
+		ID:          uuid.NewString(),
+		AggregateID: o.ID,
+		Type:        eventType,
+		Payload:     payload,
+		OccurredAt:  now,
+	})
+	return nil
+}
+
+type ListFilter struct {
+	CustomerID string
+	Limit      int
+	Offset     int
+}
+
 type Repository interface {
-	Insert(ctx context.Context, o *Order) error
+	Insert(ctx context.Context, o *Order, idempotencyKey string) error
+	Update(ctx context.Context, o *Order, from Status) error
 	FindByID(ctx context.Context, id string) (*Order, error)
+	FindByIdempotencyKey(ctx context.Context, key string) (*Order, error)
+	List(ctx context.Context, f ListFilter) ([]*Order, error)
 }
