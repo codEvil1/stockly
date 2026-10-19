@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -46,9 +47,10 @@ var (
 	ErrDuplicateSKU    = ValidationError{"duplicate sku in order"}
 	ErrInvalidID       = ValidationError{"invalid order id"}
 
-	ErrInvalidTransition = errors.New("invalid status transition")
-	ErrNotFound          = errors.New("order not found")
-	ErrDuplicateKey      = errors.New("idempotency key already used")
+	ErrInvalidTransition   = errors.New("invalid status transition")
+	ErrNotFound            = errors.New("order not found")
+	ErrDuplicateKey        = errors.New("idempotency key already used")
+	ErrIdempotencyMismatch = errors.New("idempotency key already used with different parameters")
 )
 
 type Item struct {
@@ -75,7 +77,12 @@ type Order struct {
 }
 
 func NewOrder(id, customerID string, items []Item, now time.Time) (*Order, error) {
-	if id == "" || customerID == "" || len(customerID) > maxCustomerID {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrInvalidID
+	}
+	customerID = strings.TrimSpace(customerID)
+	if customerID == "" || len(customerID) > maxCustomerID || utf8.RuneCountInString(customerID) > maxCustomerID {
 		return nil, ErrInvalidCustomer
 	}
 	if len(items) == 0 {
@@ -85,23 +92,27 @@ func NewOrder(id, customerID string, items []Item, now time.Time) (*Order, error
 		return nil, ErrTooManyItems
 	}
 	seen := make(map[string]struct{}, len(items))
-	for _, it := range items {
-		if it.SKU == "" || len(it.SKU) > maxSKULen ||
+	normalized := make([]Item, len(items))
+	for i, it := range items {
+		sku := strings.TrimSpace(it.SKU)
+		if sku == "" || len(sku) > maxSKULen || utf8.RuneCountInString(sku) > maxSKULen ||
 			it.Quantity <= 0 || it.Quantity > maxQuantity ||
 			it.PriceCents < 0 || it.PriceCents > maxPriceCents {
 			return nil, ErrInvalidItem
 		}
-		if _, dup := seen[it.SKU]; dup {
+		skuKey := strings.ToUpper(sku)
+		if _, dup := seen[skuKey]; dup {
 			return nil, ErrDuplicateSKU
 		}
-		seen[it.SKU] = struct{}{}
+		seen[skuKey] = struct{}{}
+		normalized[i] = Item{SKU: sku, Quantity: it.Quantity, PriceCents: it.PriceCents}
 	}
 
 	o := &Order{
 		ID:         id,
 		CustomerID: customerID,
 		Status:     StatusCreated,
-		Items:      slices.Clone(items),
+		Items:      normalized,
 		CreatedAt:  now,
 	}
 	if err := o.record(EventOrderCreated, now, map[string]any{
@@ -127,6 +138,23 @@ func (o *Order) Total() int64 {
 	return total
 }
 
+func (o *Order) MatchesInput(customerID string, items []Item) bool {
+	if o.CustomerID != customerID || len(o.Items) != len(items) {
+		return false
+	}
+	bySKU := make(map[string]Item, len(o.Items))
+	for _, it := range o.Items {
+		bySKU[strings.ToUpper(it.SKU)] = it
+	}
+	for _, it := range items {
+		cur, ok := bySKU[strings.ToUpper(it.SKU)]
+		if !ok || cur.SKU != it.SKU || cur.Quantity != it.Quantity || cur.PriceCents != it.PriceCents {
+			return false
+		}
+	}
+	return true
+}
+
 func (o *Order) Complete(now time.Time) error {
 	return o.transition(StatusCompleted, EventOrderCompleted, now)
 }
@@ -136,6 +164,8 @@ func (o *Order) Cancel(now time.Time) error {
 }
 
 func (o *Order) Events() []Event { return o.events }
+
+func (o *Order) ClearEvents() { o.events = nil }
 
 func (o *Order) transition(to Status, eventType string, now time.Time) error {
 	if o.Status != StatusCreated {

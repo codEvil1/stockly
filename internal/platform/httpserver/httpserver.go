@@ -2,8 +2,10 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,8 +18,8 @@ func New(addr string, logger *slog.Logger, ready ReadyFunc, mount func(r chi.Rou
 	r := chi.NewRouter()
 	r.Use(
 		middleware.RequestID,
-		middleware.Recoverer,
 		requestLogger(logger),
+		recoverer(logger),
 		middleware.Timeout(10*time.Second),
 	)
 
@@ -50,6 +52,10 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+			reqID := middleware.GetReqID(r.Context())
+			if reqID != "" {
+				w.Header().Set(middleware.RequestIDHeader, reqID)
+			}
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(ww, r)
 
@@ -63,8 +69,31 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				"status", status,
 				"bytes", ww.BytesWritten(),
 				"duration_ms", time.Since(start).Milliseconds(),
-				"request_id", middleware.GetReqID(r.Context()),
+				"request_id", reqID,
 			)
+		})
+	}
+}
+
+func recoverer(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rvr := recover(); rvr != nil {
+					if err, ok := rvr.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+						panic(rvr)
+					}
+					logger.ErrorContext(r.Context(), "panic recovered",
+						"panic", rvr,
+						"stack", string(debug.Stack()),
+						"request_id", middleware.GetReqID(r.Context()),
+					)
+					if r.Header.Get("Connection") != "Upgrade" {
+						w.WriteHeader(http.StatusInternalServerError)
+					}
+				}
+			}()
+			next.ServeHTTP(w, r)
 		})
 	}
 }

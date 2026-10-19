@@ -1,3 +1,5 @@
+//go:build integration
+
 package mysql_test
 
 import (
@@ -185,11 +187,10 @@ func TestOutboxRelayFlow(t *testing.T) {
 	if err := repo.Insert(ctx, o, ""); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, _ := repo.FindByID(ctx, o.ID)
-	if err := reloaded.Complete(time.Now().UTC()); err != nil {
+	if err := o.Complete(time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.Update(ctx, reloaded, domain.StatusCreated); err != nil {
+	if err := repo.Update(ctx, o, domain.StatusCreated); err != nil {
 		t.Fatal(err)
 	}
 

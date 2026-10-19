@@ -182,6 +182,23 @@ func TestCreate(t *testing.T) {
 			t.Fatalf("expected ErrInvalidIdempotencyKey, got %v", err)
 		}
 	})
+
+	t.Run("idempotency key reused with different payload returns conflict error", func(t *testing.T) {
+		repo := newFakeRepo()
+		svc := newTestService(repo)
+		if _, _, err := svc.Create(ctx, CreateInput{CustomerID: "c1", Items: items, IdempotencyKey: "key-1"}); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := svc.Create(ctx, CreateInput{CustomerID: "c2", Items: items, IdempotencyKey: "key-1"})
+		if !errors.Is(err, domain.ErrIdempotencyMismatch) {
+			t.Fatalf("expected ErrIdempotencyMismatch for different customer, got %v", err)
+		}
+		otherItems := []domain.Item{{SKU: "A", Quantity: 99, PriceCents: 1000}}
+		_, _, err = svc.Create(ctx, CreateInput{CustomerID: "c1", Items: otherItems, IdempotencyKey: "key-1"})
+		if !errors.Is(err, domain.ErrIdempotencyMismatch) {
+			t.Fatalf("expected ErrIdempotencyMismatch for different items, got %v", err)
+		}
+	})
 }
 
 type racyRepo struct {

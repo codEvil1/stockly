@@ -29,11 +29,14 @@ func TestNewOrder(t *testing.T) {
 		{"negative price", "id-1", "cust-1", []Item{{"A", 1, -1}}, ErrInvalidItem, 0},
 		{"price above limit", "id-1", "cust-1", []Item{{"A", 1, maxPriceCents + 1}}, ErrInvalidItem, 0},
 		{"empty sku", "id-1", "cust-1", []Item{{"", 1, 100}}, ErrInvalidItem, 0},
+		{"whitespace sku", "id-1", "cust-1", []Item{{"   ", 1, 100}}, ErrInvalidItem, 0},
 		{"sku too long", "id-1", "cust-1", []Item{{strings.Repeat("a", maxSKULen+1), 1, 100}}, ErrInvalidItem, 0},
 		{"duplicate sku", "id-1", "cust-1", []Item{{"A", 1, 100}, {"A", 2, 100}}, ErrDuplicateSKU, 0},
+		{"duplicate sku case-insensitive", "id-1", "cust-1", []Item{{"sku-1", 1, 100}, {"SKU-1", 2, 100}}, ErrDuplicateSKU, 0},
 		{"empty customer", "id-1", "", []Item{{"A", 1, 100}}, ErrInvalidCustomer, 0},
+		{"whitespace customer", "id-1", "   ", []Item{{"A", 1, 100}}, ErrInvalidCustomer, 0},
 		{"customer too long", "id-1", strings.Repeat("c", maxCustomerID+1), []Item{{"A", 1, 100}}, ErrInvalidCustomer, 0},
-		{"empty id", "", "cust-1", []Item{{"A", 1, 100}}, ErrInvalidCustomer, 0},
+		{"empty id", "", "cust-1", []Item{{"A", 1, 100}}, ErrInvalidID, 0},
 		{"free item is allowed", "id-1", "cust-1", []Item{{"A", 1, 0}}, nil, 0},
 		{"valid", "id-1", "cust-1", []Item{{"A", 2, 1000}, {"B", 1, 550}}, nil, 2550},
 	}
@@ -130,11 +133,38 @@ func TestTransitions(t *testing.T) {
 			t.Errorf("a rejected transition must not emit events")
 		}
 	})
+
+	t.Run("clear events resets pending events", func(t *testing.T) {
+		o := newOrder(t)
+		o.ClearEvents()
+		if len(o.Events()) != 0 {
+			t.Errorf("expected 0 events after ClearEvents, got %d", len(o.Events()))
+		}
+		if err := o.Complete(now); err != nil {
+			t.Fatal(err)
+		}
+		if len(o.Events()) != 1 || o.Events()[0].Type != EventOrderCompleted {
+			t.Errorf("expected only OrderCompleted after ClearEvents, got %+v", o.Events())
+		}
+	})
 }
 
 func TestRehydrateHasNoPendingEvents(t *testing.T) {
 	o := Rehydrate("id", "cust", StatusCompleted, []Item{{"A", 1, 100}}, time.Now())
 	if len(o.Events()) != 0 {
 		t.Errorf("rehydrated orders must not carry events")
+	}
+}
+
+func TestMatchesInput(t *testing.T) {
+	o := Rehydrate("id", "cust-1", StatusCreated, []Item{{"A", 2, 100}, {"B", 1, 50}}, time.Now())
+	if !o.MatchesInput("cust-1", []Item{{"B", 1, 50}, {"A", 2, 100}}) {
+		t.Errorf("should match regardless of item order")
+	}
+	if o.MatchesInput("cust-2", []Item{{"A", 2, 100}, {"B", 1, 50}}) {
+		t.Errorf("should not match different customer")
+	}
+	if o.MatchesInput("cust-1", []Item{{"A", 99, 100}, {"B", 1, 50}}) {
+		t.Errorf("should not match different quantity")
 	}
 }

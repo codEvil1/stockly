@@ -121,7 +121,7 @@ curl -X POST localhost:8080/orders/<id>/complete   # ou /cancel
 
 | Método | Rota | Descrição | Respostas |
 |--------|------|-----------|-----------|
-| POST | `/orders` | Cria pedido (`Idempotency-Key` opcional) | 201, 200 (replay), 400 |
+| POST | `/orders` | Cria pedido (`Idempotency-Key` opcional) | 201, 200 (replay), 400, 409 |
 | GET | `/orders` | Lista com `customer_id`, `limit` (máx. 100), `offset` | 200, 400 |
 | GET | `/orders/{id}` | Busca por ID | 200, 400, 404 |
 | POST | `/orders/{id}/complete` | `CREATED → COMPLETED` | 200, 404, 409 |
@@ -152,7 +152,7 @@ Todas por variável de ambiente; veja [`.env.example`](.env.example) para a list
 
 - [ ] Publisher real (Kafka ou SQS) no lugar do `eventlog`, com consumidores idempotentes.
 - [ ] Rotina de limpeza do outbox e das chaves de idempotência antigas.
-- [ ] Validar o hash do corpo junto com a `Idempotency-Key`.
+- [x] Validar compatibilidade do payload junto com a `Idempotency-Key`.
 - [ ] Paginação por cursor (*keyset*) no lugar de `OFFSET`.
 - [ ] Autenticação e autorização.
 - [ ] Métricas (Prometheus) e tracing (OpenTelemetry).

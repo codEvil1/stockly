@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -49,18 +51,9 @@ type CreateInput struct {
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Order, bool, error) {
-	if len(in.IdempotencyKey) > maxIdemKeyLen {
+	key := strings.TrimSpace(in.IdempotencyKey)
+	if len(key) > maxIdemKeyLen || utf8.RuneCountInString(key) > maxIdemKeyLen {
 		return nil, false, ErrInvalidIdempotencyKey
-	}
-
-	if in.IdempotencyKey != "" {
-		existing, err := s.repo.FindByIdempotencyKey(ctx, in.IdempotencyKey)
-		switch {
-		case err == nil:
-			return existing, false, nil
-		case !errors.Is(err, domain.ErrNotFound):
-			return nil, false, err
-		}
 	}
 
 	o, err := domain.NewOrder(s.newID(), in.CustomerID, in.Items, s.now())
@@ -68,11 +61,27 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Order, bo
 		return nil, false, err
 	}
 
-	if err := s.repo.Insert(ctx, o, in.IdempotencyKey); err != nil {
+	if key != "" {
+		existing, err := s.repo.FindByIdempotencyKey(ctx, key)
+		switch {
+		case err == nil:
+			if !existing.MatchesInput(o.CustomerID, o.Items) {
+				return nil, false, domain.ErrIdempotencyMismatch
+			}
+			return existing, false, nil
+		case !errors.Is(err, domain.ErrNotFound):
+			return nil, false, err
+		}
+	}
+
+	if err := s.repo.Insert(ctx, o, key); err != nil {
 		if errors.Is(err, domain.ErrDuplicateKey) {
-			existing, ferr := s.repo.FindByIdempotencyKey(ctx, in.IdempotencyKey)
+			existing, ferr := s.repo.FindByIdempotencyKey(ctx, key)
 			if ferr != nil {
 				return nil, false, ferr
+			}
+			if !existing.MatchesInput(o.CustomerID, o.Items) {
+				return nil, false, domain.ErrIdempotencyMismatch
 			}
 			return existing, false, nil
 		}

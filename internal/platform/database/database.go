@@ -16,7 +16,7 @@ type Options struct {
 	MaxIdleConns int
 	ConnMaxLife  time.Duration
 	ConnectTries int
-	RetryDelay time.Duration
+	RetryDelay   time.Duration
 }
 
 func Open(ctx context.Context, opts Options, logger *slog.Logger) (*sql.DB, error) {

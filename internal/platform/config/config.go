@@ -61,7 +61,7 @@ func load(get func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr: str("HTTP_ADDR", ":8080"),
+		HTTPAddr:        str("HTTP_ADDR", ":8080"),
 		DBDSN:           str("DB_DSN", "root:root@tcp(127.0.0.1:3307)/stockly?parseTime=true&loc=UTC"),
 		DBMaxOpenConns:  integer("DB_MAX_OPEN_CONNS", 25),
 		DBMaxIdleConns:  integer("DB_MAX_IDLE_CONNS", 25),

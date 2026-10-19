@@ -66,11 +66,14 @@ func run() error {
 		cfg.OutboxInterval, cfg.OutboxBatchSize, logger,
 	)
 
+	relayCtx, stopRelay := context.WithCancel(context.Background())
+	defer stopRelay()
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		relay.Run(ctx)
+		relay.Run(relayCtx)
 	}()
 
 	serverErr := make(chan error, 1)
@@ -86,6 +89,7 @@ func run() error {
 		logger.Info("shutting down...")
 	case err := <-serverErr:
 		stop()
+		stopRelay()
 		wg.Wait()
 		return err
 	}
@@ -93,6 +97,7 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	shutdownErr := srv.Shutdown(shutdownCtx)
+	stopRelay()
 	wg.Wait()
 	return shutdownErr
 }

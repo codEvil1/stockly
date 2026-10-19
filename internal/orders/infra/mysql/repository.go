@@ -48,17 +48,17 @@ func (r *Repository) Insert(ctx context.Context, o *domain.Order, idempotencyKey
 		}
 		return err
 	}
-	for _, it := range o.Items {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO order_items (order_id, sku, quantity, price_cents) VALUES (?,?,?,?)`,
-			o.ID, it.SKU, it.Quantity, it.PriceCents); err != nil {
-			return err
-		}
+	if err := insertItems(ctx, tx, o.ID, o.Items); err != nil {
+		return err
 	}
 	if err := insertEvents(ctx, tx, o.Events()); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	o.ClearEvents()
+	return nil
 }
 
 func (r *Repository) Update(ctx context.Context, o *domain.Order, from domain.Status) error {
@@ -91,7 +91,11 @@ func (r *Repository) Update(ctx context.Context, o *domain.Order, from domain.St
 	if err := insertEvents(ctx, tx, o.Events()); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	o.ClearEvents()
+	return nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id string) (*domain.Order, error) {
@@ -199,15 +203,40 @@ func (r *Repository) loadItems(ctx context.Context, orderIDs []string) (map[stri
 	return out, rows.Err()
 }
 
-func insertEvents(ctx context.Context, tx execer, events []domain.Event) error {
-	for _, e := range events {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO outbox (id, aggregate_id, type, payload, created_at) VALUES (?,?,?,?,?)`,
-			e.ID, e.AggregateID, e.Type, e.Payload, e.OccurredAt); err != nil {
-			return err
-		}
+func insertItems(ctx context.Context, tx execer, orderID string, items []domain.Item) error {
+	if len(items) == 0 {
+		return nil
 	}
-	return nil
+	var b strings.Builder
+	b.WriteString(`INSERT INTO order_items (order_id, sku, quantity, price_cents) VALUES `)
+	args := make([]any, 0, len(items)*4)
+	for i, it := range items {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`(?,?,?,?)`)
+		args = append(args, orderID, it.SKU, it.Quantity, it.PriceCents)
+	}
+	_, err := tx.ExecContext(ctx, b.String(), args...)
+	return err
+}
+
+func insertEvents(ctx context.Context, tx execer, events []domain.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString(`INSERT INTO outbox (id, aggregate_id, type, payload, created_at) VALUES `)
+	args := make([]any, 0, len(events)*5)
+	for i, e := range events {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`(?,?,?,?,?)`)
+		args = append(args, e.ID, e.AggregateID, e.Type, e.Payload, e.OccurredAt)
+	}
+	_, err := tx.ExecContext(ctx, b.String(), args...)
+	return err
 }
 
 func isDuplicateIdempotencyKey(err error) bool {

@@ -61,6 +61,8 @@ paths:
                 $ref: "#/components/schemas/Order"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/Internal"
     get:

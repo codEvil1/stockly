@@ -180,6 +180,7 @@ func TestCreateOrderRejectsBadInput(t *testing.T) {
 		"missing customer":     `{"items":[{"sku":"A","quantity":1,"price_cents":1}]}`,
 		"customer too long":    `{"customer_id":"` + strings.Repeat("c", 37) + `","items":[{"sku":"A","quantity":1,"price_cents":1}]}`,
 		"duplicate sku":        `{"customer_id":"c","items":[{"sku":"A","quantity":1,"price_cents":1},{"sku":"A","quantity":1,"price_cents":1}]}`, // antes virava 500
+		"duplicate sku case":   `{"customer_id":"c","items":[{"sku":"sku-1","quantity":1,"price_cents":1},{"sku":"SKU-1","quantity":1,"price_cents":1}]}`,
 		"body with wrong type": `{"customer_id":1,"items":[]}`,
 	}
 	for name, body := range cases {
@@ -211,6 +212,11 @@ func TestCreateOrderIsIdempotent(t *testing.T) {
 	}
 	if r2.Header.Get("Idempotent-Replay") != "true" {
 		t.Errorf("replay must be flagged with Idempotent-Replay: true")
+	}
+
+	differentBody := `{"customer_id":"cust-2","items":[{"sku":"A","quantity":2,"price_cents":1000}]}`
+	if resp, _ := createOrder(t, srv, differentBody, h); resp.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409 when reusing key with different payload, got %d", resp.StatusCode)
 	}
 
 	_, o3 := createOrder(t, srv, validBody, map[string]string{"Idempotency-Key": "other"})
@@ -301,7 +307,7 @@ func TestListOrders(t *testing.T) {
 	if code, l := get("?customer_id=nobody"); code != 200 || l.Items == nil || len(l.Items) != 0 {
 		t.Errorf("an empty list must be [] and not null, got %+v", l)
 	}
-	for _, q := range []string{"?limit=abc", "?limit=-1", "?offset=x"} {
+	for _, q := range []string{"?limit=abc", "?limit=-1", "?limit=101", "?offset=x", "?customer_id=" + strings.Repeat("c", 37)} {
 		if code, _ := get(q); code != http.StatusBadRequest {
 			t.Errorf("%s: expected 400, got %d", q, code)
 		}
